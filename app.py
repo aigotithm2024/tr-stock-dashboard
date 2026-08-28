@@ -72,7 +72,23 @@ st.set_page_config(
     page_title="TR Stock Dashboard",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",  # phone-first: main content shows immediately, sidebar is one tap away
+)
+
+# Mobile-friendly tweaks. Streamlit's grid already stacks columns on narrow
+# viewports, but default paddings/fonts are tuned for desktop — this trims
+# the wasted space and enlarges tap targets for phone use.
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 1.2rem; padding-left: 0.8rem; padding-right: 0.8rem; padding-bottom: 2rem; }
+    div.stButton > button { width: 100%; padding-top: 0.6rem; padding-bottom: 0.6rem; }
+    [data-testid="stMetricValue"] { font-size: 1.3rem; }
+    [data-testid="stMetricLabel"] { font-size: 0.8rem; }
+    h1, h2, h3 { word-break: break-word; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # Substrings that reliably indicate a network/DNS-level block rather than
@@ -116,6 +132,31 @@ EU_US_MAPPING: dict[str, dict] = {
     "Microsoft": {"name": "Microsoft Corp.", "yfinance": "MSFT"},
     "Amazon": {"name": "Amazon.com Inc.", "yfinance": "AMZN"},
     "Alphabet (Google)": {"name": "Alphabet Inc.", "yfinance": "GOOGL"},
+}
+
+FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
+
+# Curated large-cap tickers used to filter the earnings calendar down to
+# "big players" — Finnhub's free tier doesn't include market cap in the
+# earnings-calendar response, and calling yfinance per symbol to check market
+# cap would be slow and re-trigger the exact rate-limit issues we just fixed.
+# A fixed, well-known list of megacaps/blue chips is faster and more
+# predictable. Extend this list any time.
+BIG_PLAYER_TICKERS: set[str] = {
+    # "Magnificent 7" + major tech
+    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA",
+    "AVGO", "ORCL", "ADBE", "CRM", "NFLX", "AMD", "INTC", "CSCO", "IBM",
+    "QCOM", "TXN", "NOW", "UBER", "ABNB", "SHOP", "SNOW", "PLTR", "COIN",
+    "PYPL", "SQ", "SPOT",
+    # Dow 30 / blue chips
+    "JPM", "V", "MA", "JNJ", "PG", "XOM", "CVX", "UNH", "HD", "WMT",
+    "KO", "PEP", "MCD", "NKE", "DIS", "BA", "CAT", "GE", "GS", "MS",
+    "C", "BAC", "WFC", "T", "VZ", "MRK", "PFE", "ABBV", "LMT", "RTX",
+    "UNP", "DE", "MMM", "HON", "SBUX", "LOW", "TGT", "UPS", "COST", "F", "GM",
+    # Popular EU names also on Trade Republic (from EU_US_MAPPING above)
+    "SAP.DE", "ADS.DE", "SIE.DE", "ALV.DE", "BAS.DE", "VOW3.DE", "BMW.DE",
+    "DBK.DE", "DTE.DE", "MBG.DE", "AIR.PA", "MC.PA", "ASML.AS", "NESN.SW",
+    "NOVO-B.CO",
 }
 
 
@@ -259,6 +300,34 @@ def fetch_company_name(ticker: str) -> str:
         return info.get("longName") or info.get("shortName") or ticker
     except Exception:
         return ticker
+
+
+# ======================================================================
+# DATA FETCHING — EARNINGS CALENDAR (Finnhub, optional free API key)
+# ======================================================================
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_earnings_calendar(date_str: str, api_key: str) -> Optional[list[dict]]:
+    """
+    Finnhub's free-tier earnings calendar. Returns raw entries for the given
+    date (YYYY-MM-DD) or None on failure. Needs a free API key from
+    finnhub.io (no credit card) — without one, the earnings page shows
+    sign-up instructions instead of failing silently.
+    """
+    if not api_key:
+        return None
+    try:
+        resp = requests.get(
+            f"{FINNHUB_BASE_URL}/calendar/earnings",
+            params={"from": date_str, "to": date_str, "token": api_key},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        return data.get("earningsCalendar", [])
+    except Exception:
+        return None
 
 
 # ======================================================================
@@ -648,6 +717,11 @@ if "alpaca_secret" not in st.session_state:
         st.session_state.alpaca_secret = st.secrets.get("ALPACA_SECRET_KEY", "")
     except Exception:
         st.session_state.alpaca_secret = ""
+if "finnhub_key" not in st.session_state:
+    try:
+        st.session_state.finnhub_key = st.secrets.get("FINNHUB_API_KEY", "")
+    except Exception:
+        st.session_state.finnhub_key = ""
 
 
 # ======================================================================
@@ -658,7 +732,11 @@ with st.sidebar:
     st.title("📈 TR Stock Dashboard")
     st.caption("Live-Kursanalyse ohne Trade-Republic-API-Zugriff")
 
-    page = st.radio("Ansicht", ["🔍 Analyse", "📊 Live-Cockpit", "📡 Scanner"], label_visibility="collapsed")
+    page = st.radio(
+        "Ansicht",
+        ["🔍 Analyse", "📊 Live-Cockpit", "📡 Scanner", "📅 Earnings"],
+        label_visibility="collapsed",
+    )
 
     st.divider()
     st.subheader("Strategie")
@@ -714,6 +792,30 @@ with st.sidebar:
         )
         st.session_state.alpaca_key = st.text_input("Alpaca API Key ID", value=st.session_state.alpaca_key, type="password")
         st.session_state.alpaca_secret = st.text_input("Alpaca Secret Key", value=st.session_state.alpaca_secret, type="password")
+
+    with st.expander("⚙️ Finnhub API (für Earnings-Kalender)"):
+        st.caption(
+            "Kostenloser Key von finnhub.io (keine Kreditkarte nötig) — wird für die "
+            "Earnings-Kalender-Seite gebraucht. Nur im Sitzungsspeicher, nicht gespeichert."
+        )
+        st.session_state.finnhub_key = st.text_input(
+            "Finnhub API Key", value=st.session_state.finnhub_key, type="password"
+        )
+
+    st.divider()
+    st.subheader("Watchlist")
+    bulk_tickers = st.text_input(
+        "Mehrere Ticker auf einmal hinzufügen",
+        placeholder="AAPL, TSLA, SAP.DE",
+        help="Komma-getrennt eintippen und Enter drücken.",
+    )
+    if bulk_tickers:
+        if st.button("➕ Zur Watchlist hinzufügen", use_container_width=True, key="bulk_add_btn"):
+            for t in bulk_tickers.split(","):
+                t = t.strip().upper()
+                if t:
+                    add_to_watchlist(t)
+            st.rerun()
 
     refresh_seconds = st.slider(
         "🔄 Aktualisierungsintervall (Sek.)", min_value=2, max_value=30,
@@ -846,7 +948,10 @@ def render_analysis_page() -> None:
         )
 
     fig = build_candlestick_chart(df, ticker, display_name, signal=signal)
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+    st.plotly_chart(
+        fig, use_container_width=True,
+        config={"scrollZoom": False, "displaylogo": False},  # scrollZoom off: fights with page-scroll on touch
+    )
 
     if signal is not None:
         render_signal_panel(signal)
@@ -905,12 +1010,21 @@ def render_dashboard_page() -> None:
 
     watchlist = st.session_state.watchlist
     if not watchlist:
-        st.info("Deine Watchlist ist leer. Füge auf der Analyse-Seite Aktien hinzu.")
+        st.info(
+            "Deine Watchlist ist noch leer. Das ist normal bei einem frischen Deployment — "
+            "eine Watchlist von deinem PC überträgt sich nicht automatisch auf die Cloud-App, "
+            "da beide getrennte Dateisysteme haben. Füge Aktien entweder auf der Analyse-Seite "
+            "hinzu, oder links in der Sidebar unter **'Watchlist'** mehrere auf einmal "
+            "(z. B. `AAPL, TSLA, SAP.DE`)."
+        )
         return
 
     st.caption(f"Letzte Aktualisierung: {datetime.now().strftime('%H:%M:%S')} · Intervall: {refresh_seconds}s")
 
-    cols_per_row = 4
+    cols_per_row = st.select_slider(
+        "Spalten pro Reihe", options=[1, 2, 3, 4], value=2,
+        help="Auf dem Handy sind 1–2 Spalten meist besser lesbar, am Desktop 3–4.",
+    )
     rows = [watchlist[i:i + cols_per_row] for i in range(0, len(watchlist), cols_per_row)]
 
     for row in rows:
@@ -1069,6 +1183,100 @@ def render_scanner_page() -> None:
 
 
 # ======================================================================
+# PAGE: EARNINGS-KALENDER ("wer hat heute financial releases")
+# ======================================================================
+
+EARNINGS_HOUR_LABELS = {
+    "bmo": "🌅 Vor Börsenöffnung",
+    "amc": "🌙 Nach Börsenschluss",
+    "dmh": "🕐 Während der Handelszeit",
+}
+
+
+def render_earnings_page() -> None:
+    st.subheader("📅 Earnings-Kalender — Big Player heute")
+    st.caption(
+        "Zeigt bekannte Large-Caps (Mag7, Dow 30 & bekannte EU-Werte), die heute Quartalszahlen "
+        "veröffentlichen — mögliche Kandidaten für Event-Trades rund um die Reaktion auf die Zahlen. "
+        "Datenquelle: Finnhub (kostenloser Free-Tier-Key nötig, siehe Sidebar)."
+    )
+
+    api_key = st.session_state.get("finnhub_key", "")
+    if not api_key:
+        st.warning(
+            "⚠️ Kein Finnhub-API-Key hinterlegt. Kostenlos in ca. 1 Minute erledigt:\n\n"
+            "1. Auf **finnhub.io** registrieren (kostenlos, keine Kreditkarte)\n"
+            "2. Im Dashboard den API-Key kopieren\n"
+            "3. Links in der Sidebar unter **'⚙️ Finnhub API'** einfügen"
+        )
+        return
+
+    today = datetime.now()
+    col_date, col_toggle = st.columns([2, 1])
+    with col_date:
+        selected_date = st.date_input("Datum", value=today, format="YYYY-MM-DD")
+    with col_toggle:
+        only_big_players = st.checkbox("Nur Big Player", value=True)
+
+    date_str = selected_date.strftime("%Y-%m-%d")
+    with st.spinner("Lade Earnings-Kalender…"):
+        entries = fetch_earnings_calendar(date_str, api_key)
+
+    if entries is None:
+        st.error(
+            "❌ Earnings-Kalender konnte nicht geladen werden. Prüfe den API-Key oder versuche "
+            "es gleich noch einmal (Finnhub Free-Tier hat ein Rate-Limit von 60 Anfragen/Minute)."
+        )
+        return
+
+    if not entries:
+        st.info(f"Keine Earnings-Meldungen für den {date_str} gefunden.")
+        return
+
+    if only_big_players:
+        entries = [e for e in entries if e.get("symbol") in BIG_PLAYER_TICKERS]
+
+    if not entries:
+        st.info(
+            f"Für den {date_str} sind keine bekannten Big-Player-Earnings gelistet. "
+            f"Schalte 'Nur Big Player' aus, um alle gemeldeten Ticker für diesen Tag zu sehen."
+        )
+        return
+
+    # group by time-of-day (bmo/amc/dmh) for a clearer read
+    grouped: dict[str, list[dict]] = {}
+    for e in entries:
+        hour = e.get("hour") or "dmh"
+        grouped.setdefault(hour, []).append(e)
+
+    for hour_key in ("bmo", "dmh", "amc"):
+        if hour_key not in grouped:
+            continue
+        st.markdown(f"#### {EARNINGS_HOUR_LABELS.get(hour_key, hour_key)}")
+        for e in sorted(grouped[hour_key], key=lambda x: x.get("symbol") or ""):
+            symbol = e.get("symbol", "?")
+            eps_est = e.get("epsEstimate")
+            eps_act = e.get("epsActual")
+            rev_est = e.get("revenueEstimate")
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([1.3, 1, 1])
+                c1.markdown(f"**{symbol}**")
+                c2.markdown(f"EPS Schätzung: {eps_est:.2f}" if isinstance(eps_est, (int, float)) else "EPS: —")
+                if eps_act is not None:
+                    c3.markdown(f"EPS tatsächlich: {eps_act:.2f}")
+                elif rev_est:
+                    c3.markdown(f"Umsatz-Schätzung: {rev_est:,.0f}")
+                if st.button("🔍 Im Analyse-Tab öffnen", key=f"earn_open_{symbol}_{hour_key}"):
+                    st.session_state.active_ticker = symbol
+                    st.rerun()
+
+    st.caption(
+        "⚠️ EPS-Schätzungen sind Analystenkonsens, keine Kursprognose — auch bei einem "
+        "'guten' Ergebnis kann der Kurs fallen (und umgekehrt). Keine Anlageberatung."
+    )
+
+
+# ======================================================================
 # ROUTER
 # ======================================================================
 
@@ -1076,5 +1284,7 @@ if page == "🔍 Analyse":
     render_analysis_page()
 elif page == "📊 Live-Cockpit":
     render_dashboard_page()
-else:
+elif page == "📡 Scanner":
     render_scanner_page()
+else:
+    render_earnings_page()

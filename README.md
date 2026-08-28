@@ -93,15 +93,16 @@ kostenlose Weg:
 5. Nach ca. 1–2 Minuten bekommst du eine URL wie
    `https://dein-name-tr-dashboard.streamlit.app` — die kannst du dir als
    Lesezeichen speichern oder auf dem Handy öffnen.
-6. Optional, für Alpaca-Keys ohne manuelle Eingabe: in der Streamlit-Cloud-
-   App unter "Settings → Secrets" einfügen:
+6. Optional, für Alpaca- und Finnhub-Keys ohne manuelle Eingabe: in der
+   Streamlit-Cloud-App unter "Settings → Secrets" einfügen:
    ```toml
    ALPACA_API_KEY = "dein-key"
    ALPACA_SECRET_KEY = "dein-secret"
+   FINNHUB_API_KEY = "dein-finnhub-key"
    ```
    Die App liest diese automatisch (siehe `st.secrets` in `app.py`).
 
-**Zwei ehrliche Hinweise dazu:**
+**Drei ehrliche Hinweise dazu:**
 - Da die Anfragen dann von Streamlit Clouds Servern kommen, nicht von
   deinem PC, betrifft dich das lokale AdGuard/`fc.yahoo.com`-Problem dort
   in der Regel nicht mehr.
@@ -111,13 +112,42 @@ kostenlose Weg:
   Datenbank auslagern — für den persönlichen Gebrauch reicht der aktuelle
   Ansatz meist aus, aber es ist kein Garant für ewige Persistenz wie bei
   einer lokalen Datei auf deinem eigenen PC.
+- **Wichtig:** Eine lokale Watchlist von deinem PC überträgt sich NICHT
+  automatisch auf die Cloud-App — beide haben getrennte Dateisysteme. Nach
+  dem ersten Deploy ist die Watchlist der Cloud-App leer; einfach über die
+  Analyse-Seite oder den Sidebar-Bulk-Import (`AAPL, TSLA, SAP.DE`, Komma-
+  getrennt) neu befüllen.
 
-## 8. Watchlist (lokal)
+## 8. Watchlist
 
-Gespeicherte Aktien liegen lokal in `watchlist.json` im selben Ordner wie
-`app.py` und bleiben nach Neustart erhalten.
+Gespeicherte Aktien liegen in `watchlist.json` im selben Ordner wie
+`app.py` und bleiben nach Neustart erhalten — lokal und in der Cloud
+jeweils getrennt (siehe Hinweis oben).
 
-## 9. Troubleshooting
+## 9. Earnings-Kalender (Big Player heute)
+
+Zeigt, welche bekannten Large-Caps (Mag7, Dow 30, bekannte EU-Werte) an
+einem gewählten Tag Quartalszahlen veröffentlichen — nützlich, um nach
+möglichen Event-Trade-Kandidaten rund um Earnings-Reaktionen zu suchen.
+
+- Braucht einen kostenlosen API-Key von **finnhub.io** (keine Kreditkarte),
+  eintragbar in der Sidebar unter "⚙️ Finnhub API" oder als Cloud-Secret
+  (siehe oben).
+- Die "Big Player"-Filterung nutzt eine fest hinterlegte Liste bekannter
+  Large-Caps in `app.py` (`BIG_PLAYER_TICKERS`), da Finnhubs kostenloser
+  Earnings-Endpunkt selbst keine Marktkapitalisierung liefert. Liste kann
+  im Code beliebig erweitert werden.
+- EPS-Schätzungen sind Analystenkonsens, keine Kursprognose — auch bei
+  guten Zahlen kann der Kurs fallen. Keine Anlageberatung.
+
+## 10. Mobile Nutzung
+
+Die App ist inzwischen für Handy-Nutzung optimiert: Sidebar startet
+eingeklappt, Karten-Layouts sind auf 1–2 Spalten einstellbar, Chart-Zoom
+per Pinch-Geste ist deaktiviert (kollidiert sonst mit dem Scrollen der
+Seite) — Zoomen geht über die Plotly-Toolbar-Icons oben rechts am Chart.
+
+## 11. Troubleshooting
 
 | Problem | Lösung |
 |---|---|
